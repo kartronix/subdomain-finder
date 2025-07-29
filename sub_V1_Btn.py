@@ -2,9 +2,25 @@ import streamlit as st
 import requests
 import socket
 import pandas as pd
+import concurrent.futures
 
-# --- Functions ---
-def fetch_subdomains(domain):
+# --- Configuration ---
+st.set_page_config(page_title="Subdomain & IP Finder", layout="centered")
+st.title("🔍 Subdomain & IP Finder")
+
+# --- Helper Functions ---
+def resolve_ip(domain):
+    try:
+        return socket.gethostbyname(domain)
+    except:
+        return "Unresolved"
+
+def resolve_all(subdomains):
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+        return list(executor.map(lambda d: {"Subdomain": d, "IP": resolve_ip(d)}, subdomains))
+
+@st.cache_data(ttl=600)
+def fetch_subdomains(domain: str):
     url = f"https://crt.sh/?q=%25.{domain}&output=json"
     headers = {"User-Agent": "Mozilla/5.0"}
 
@@ -12,7 +28,8 @@ def fetch_subdomains(domain):
     retries = requests.adapters.Retry(
         total=3,
         backoff_factor=2,
-        status_forcelist=[429, 502, 503, 504]
+        status_forcelist=[429, 502, 503, 504],
+        raise_on_status=False
     )
     adapter = requests.adapters.HTTPAdapter(max_retries=retries)
     session.mount('https://', adapter)
@@ -23,33 +40,32 @@ def fetch_subdomains(domain):
             st.error(f"crt.sh returned status code {response.status_code}")
             return []
 
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError:
+            st.error("crt.sh returned invalid JSON.")
+            return []
+
         subdomains = set()
+        domain_lower = domain.lower()
 
         for entry in data:
             if 'name_value' in entry:
                 names = entry['name_value'].split('\n')
                 for name in names:
-                    cleaned = name.strip()
-                    if cleaned.endswith(domain):
-                        subdomains.add(cleaned.lower())
+                    cleaned = name.strip().lower()
+                    if cleaned.endswith(domain_lower):
+                        subdomains.add(cleaned)
 
         return sorted(subdomains)
-    except Exception as e:
+
+    except requests.exceptions.RequestException as e:
         st.error(f"Error fetching subdomains: {e}")
         return []
 
-def resolve_ip(domain):
-    try:
-        return socket.gethostbyname(domain)
-    except:
-        return "Unresolved"
-
-# --- Streamlit UI ---
-st.set_page_config(page_title="Subdomain & IP Finder", layout="centered")
-st.title("🔍 Subdomain & IP Finder")
-
-domain_input = st.text_input("Enter a domain (e.g., google.com, openai.com)", key="domain_input")
+# --- UI Elements ---
+domain_input = st.text_input("Enter a domain", value="", placeholder="google.com, openai.com").strip().lower()
+resolve_ips = st.checkbox("🌐 Resolve IP addresses (slower)", value=True)
 
 if st.button("🔍 Search"):
     if domain_input:
@@ -57,18 +73,22 @@ if st.button("🔍 Search"):
             subdomains = fetch_subdomains(domain_input)
 
         if subdomains:
-            with st.spinner("🌐 Resolving IP addresses..."):
-                results = [{"Subdomain": sub, "IP": resolve_ip(sub)} for sub in subdomains]
-                df = pd.DataFrame(results)
-            st.success(f"✅ Found {len(df)} unique subdomains.")
+            if resolve_ips:
+                with st.spinner("🌐 Resolving IP addresses..."):
+                    results = resolve_all(subdomains)
+            else:
+                results = [{"Subdomain": sub, "IP": "Not Resolved"} for sub in subdomains]
+
+            df = pd.DataFrame(results)
             st.session_state["last_result"] = df
             st.session_state["last_domain"] = domain_input
+            st.success(f"✅ Found {len(df)} unique subdomains.")
         else:
             st.warning("⚠️ No subdomains found.")
             st.session_state["last_result"] = None
             st.session_state["last_domain"] = None
 
-# Show last result (if available)
+# --- Display Last Result and Download ---
 if "last_result" in st.session_state and st.session_state["last_result"] is not None:
     st.dataframe(st.session_state["last_result"])
     csv = st.session_state["last_result"].to_csv(index=False).encode("utf-8")
