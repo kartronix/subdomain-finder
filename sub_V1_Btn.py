@@ -49,7 +49,7 @@ def resolve_ip(domain):
 st.set_page_config(page_title="Subdomain & IP Finder", layout="centered")
 st.title("🔍 Subdomain & IP Finder")
 
-domain_input = st.text_input("Enter a domain (e.g., adani.com, openai.com)", key="domain_input")
+domain_input = st.text_input("Enter a domain (e.g., google.com, openai.com)", key="domain_input")
 
 if st.button("🔍 Search"):
     if domain_input:
